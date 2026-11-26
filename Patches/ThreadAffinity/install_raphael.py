@@ -97,8 +97,30 @@ def install(kernel, source):
         sched / header_name: header,
         sched / compat.name: compat.read_text(encoding="utf-8"),
     }
-    for name in ("affinity_rules.h", "adaptive_policy.h"):
-        files[sched / name] = (source / name).read_text(encoding="utf-8")
+    adaptive_name = "adaptive_policy.h"
+    adaptive = (source / adaptive_name).read_text(encoding="utf-8")
+    adaptive = replace_once(
+        adaptive,
+        "\tunsigned int interactive = count <= 4 ? count : count - 2;\n"
+        "\tint cpu;\n\n\tfor_each_possible_cpu(cpu) {\n",
+        "\tunsigned int interactive = count <= 4 ? count : count - 2;\n"
+        "\tunsigned int background = 5;\n"
+        "\tint cpu;\n\n"
+        "\t/* Raphael has four little cores, three performance cores and one prime core. */\n"
+        "\tif (count == 8) {\n"
+        "\t\tinteractive = 7;\n"
+        "\t\tbackground = little;\n"
+        "\t}\n\n\tfor_each_possible_cpu(cpu) {\n",
+        adaptive_name,
+    )
+    adaptive = replace_once(
+        adaptive,
+        "\t\tif (index < 5)\n\t\t\tcpumask_set_cpu(cpu, &background_cpus);\n",
+        "\t\tif (index < background)\n\t\t\tcpumask_set_cpu(cpu, &background_cpus);\n",
+        adaptive_name,
+    )
+    files[sched / adaptive_name] = adaptive
+    files[sched / "affinity_rules.h"] = (source / "affinity_rules.h").read_text(encoding="utf-8")
     for path, text in files.items():
         path.write_text(text, encoding="utf-8", newline="\n")
 

@@ -251,6 +251,9 @@ jobs:
           # Configure raphael_defconfig below instead of the generic ARM64 defconfig.
           installer="$upstream/Integrate/patches.sh"
           sed -i '/^[[:space:]]*arch\/arm64\/configs\/defconfig[[:space:]]*$/d' "$installer"
+          # Millet has its own frozen_task_group() in this kernel.
+          sed -i 's/\<frozen_task_group\>/rekernel_frozen_task_group/g' \
+            "$installer" "$upstream"/Integrate/rekernel/rekernel.{c,h}
           bash -e "$installer"
 
           sed -i '/^#include <linux\/freezer.h>/a #include <linux/sched/jobctl.h>' drivers/rekernel/rekernel.h

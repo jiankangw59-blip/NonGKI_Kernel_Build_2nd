@@ -256,8 +256,8 @@ jobs:
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
 
-      - name: Verify requested ZRAM configuration
-        if: env.ZRAM_COMPRESSOR != 'source' || env.ZRAM_WRITEBACK != 'source'
+      - name: Verify requested kernel configuration
+        if: env.ZRAM_COMPRESSOR != 'source' || env.ZRAM_WRITEBACK != 'source' || env.VPNHIDE_ENABLE == 'true'
         shell: bash
         run: |
           config="$GITHUB_WORKSPACE/device_kernel/out/.config"
@@ -268,6 +268,9 @@ jobs:
             enabled) grep -Fx 'CONFIG_ZRAM_WRITEBACK=y' "$config" ;;
             disabled) grep -Fx '# CONFIG_ZRAM_WRITEBACK is not set' "$config" ;;
           esac
+          if [[ "$VPNHIDE_ENABLE" == true ]]; then
+            grep -Fx 'CONFIG_VPNHIDE=y' "$config"
+          fi
 
       - name: 🔩 Pack Process
         uses: ./.github/workflows/pack-process

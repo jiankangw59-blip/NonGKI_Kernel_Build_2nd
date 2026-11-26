@@ -3,8 +3,75 @@ name: Build Xiaomi Redmi K20 Pro (HyperOS 4.0 A17)
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      root_variant:
+        description: "KernelSU 版本和 SUSFS 组合"
+        type: choice
+        default: bakasu-susfs
+        options:
+          - bakasu-susfs
+          - bakasu
+          - sukisu-susfs
+          - sukisu
+          - next
+      zram_compressor:
+        description: "ZRAM 默认压缩算法（源码当前为 LZ4）"
+        type: choice
+        default: source
+        options:
+          - source
+          - lz4
+          - zstd
+      zram_writeback:
+        description: "ZRAM writeback（源码当前开启）"
+        type: choice
+        default: source
+        options:
+          - source
+          - enabled
+          - disabled
+      rekernel:
+        description: "启用 Re:Kernel 补丁"
+        type: boolean
+        default: false
+      droidspaces:
+        description: "启用 Droidspaces（与 SUSFS 同用可能异常）"
+        type: boolean
+        default: false
+      baseband_guard:
+        description: "Baseband Guard 保护范围"
+        type: choice
+        default: disabled
+        options:
+          - disabled
+          - baseband
+          - baseband-and-boot
+      nomount:
+        description: "启用 NoMount 补丁"
+        type: boolean
+        default: false
+      fgetpriority:
+        description: "启用 fgetpriority 补丁"
+        type: boolean
+        default: false
+      vpnhide:
+        description: "启用 VPNHide 补丁"
+        type: boolean
+        default: false
+      pack_kmodules:
+        description: "将本次编译生成的 .ko 加入 AnyKernel3 包"
+        type: boolean
+        default: false
+      build_debugger:
+        description: "上传可用的补丁和编译诊断文件"
+        type: boolean
+        default: false
 
 env:
+  ROOT_VARIANT: ${{ inputs.root_variant || 'bakasu-susfs' }}
+  ZRAM_COMPRESSOR: ${{ inputs.zram_compressor || 'source' }}
+  ZRAM_WRITEBACK: ${{ inputs.zram_writeback || 'source' }}
+
   # Device env
   DEVICE_NAME : "redmi_k20_pro"
   DEVICE_CODENAME : "raphael"
@@ -33,9 +100,7 @@ env:
   KERNELSU_BRANCH : ""
 
   KERNELSU_AUTO_GET : "true" # if u want easy setting kernelsu, u can true.
-  KERNELSU_AUTO_FORK : "bakasu" # xxksu, rsuntk, next, bakasu and sukisu
 
-  SUSFS_ENABLE : true
   SUSFS_FIXED : true
 
   AK3_SOURCE : "https://github.com/GengWei1997/AnyKernel3.git"
@@ -52,7 +117,7 @@ env:
   PYTHON_VERSION: "3" # Only 2(Ubuntu 22.04 and Ubuntu 20.04) or 3(Any OS Versions).
 
   PACK_METHOD: "AnyKernel3" # Anykernel3 need SOURCE and BRANCH, MKBOOTIMG needn't it.
-  PACK_KMODULES: "false" # if u want pack kernel modules (.ko) into Anykernel3.
+  PACK_KMODULES: ${{ inputs.pack_kmodules == true }}
 
   KERNELSU_METHOD: "shell" # shell, manual and only.
 
@@ -62,11 +127,11 @@ env:
   SUSFS_FOLDER_FIXED: "k20p_hyperos_a17_zundamon" # Fill in your patch prefix directory here. Leave it blank if there isn't one. -> your_folder
   SUSFS_PATCH_FIXED: "susfs_fixed" # Fill in your patches here. If there are multiple patches, please separate them with a comma. Leave it blank if there isn't one. -> patch1,patch2
 
-  REKERNEL_ENABLE: "false" # if u need Re:Kernel.
-  DROIDSPACES_ENABLE: "false" # if u need Droidspaces or LXC/Docker.
-  NOMOUNT_ENABLE: "false" # if u need NoMount.
-  FGETPRIORITY_ENABLE: "false" #if u need hide getpriority.
-  VPNHIDE_ENABLE: "false" #if u need hide vpn status.
+  REKERNEL_ENABLE: ${{ inputs.rekernel == true }}
+  DROIDSPACES_ENABLE: ${{ inputs.droidspaces == true }}
+  NOMOUNT_ENABLE: ${{ inputs.nomount == true }}
+  FGETPRIORITY_ENABLE: ${{ inputs.fgetpriority == true }}
+  VPNHIDE_ENABLE: ${{ inputs.vpnhide == true }}
 
   HOOK_METHOD: "syscall" # Manual hook method -> syscall.
 
@@ -75,13 +140,13 @@ env:
   KPM_KPATCH_NEXT: "false" # If u want hook KPatch-Next in build step.
   KPM_PATCH_SOURCE: "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_patch/refs/heads/main/kpm/patch_linux" # If u want to use KPM Inline,so you need set patch exec file source -> raw.githubusercontent.com/Test/Test/patch .
 
-  BASEBAND_GUARD_ENABLE: "false" #if u want prevent unauthorized writes to critical partitions/device nodes.
-  BASEBAND_GUARD_BOOT: "false" #if u want to protect boot partition.
+  BASEBAND_GUARD_ENABLE: ${{ inputs.baseband_guard == 'baseband' || inputs.baseband_guard == 'baseband-and-boot' }}
+  BASEBAND_GUARD_BOOT: ${{ inputs.baseband_guard == 'baseband-and-boot' }}
 
   GENERATE_DTB: "false" # if u kernel need DTB , but cannot auto generate it. (Only Anykernel3).
   GENERATE_CHIP: "qcom" # only supported for qcom and mediatek.
 
-  BUILD_DEBUGGER: "false" # Output build errors.
+  BUILD_DEBUGGER: ${{ inputs.build_debugger == true }}
   SKIP_PATCH: "false" # Ignore errors found in Patch Debugger.
 
   BUILD_OTHER_CONFIG: "false" # Merge config files.
@@ -100,6 +165,40 @@ jobs:
       CCACHE_HARDLINK: "true"
 
     steps:
+      - name: Resolve build options
+        shell: bash
+        run: |
+          susfs=false
+          case "$ROOT_VARIANT" in
+            bakasu-susfs|sukisu-susfs)
+              kernelsu="${ROOT_VARIANT%-susfs}"
+              susfs=true
+              ;;
+            bakasu|sukisu|next)
+              kernelsu="$ROOT_VARIANT"
+              ;;
+            *)
+              echo "::error::Unsupported KernelSU preset"
+              exit 1
+              ;;
+          esac
+
+          case "$ZRAM_COMPRESSOR" in
+            source|lz4|zstd) ;;
+            *) echo "::error::Unsupported ZRAM compressor"; exit 1 ;;
+          esac
+          case "$ZRAM_WRITEBACK" in
+            source|enabled|disabled) ;;
+            *) echo "::error::Unsupported ZRAM writeback mode"; exit 1 ;;
+          esac
+
+          {
+            echo "KERNELSU_AUTO_FORK=$kernelsu"
+            echo "SUSFS_ENABLE=$susfs"
+          } >> "$GITHUB_ENV"
+          printf 'KernelSU=%s SUSFS=%s ZRAM compressor=%s ZRAM writeback=%s\n' \
+            "$kernelsu" "$susfs" "$ZRAM_COMPRESSOR" "$ZRAM_WRITEBACK"
+
       - name: ⏰ Checkout repository
         uses: actions/checkout@v6
 
@@ -115,11 +214,26 @@ jobs:
       - name: 🔗 Patch for no-kprobe
         uses: ./.github/workflows/patch-no-kprobe
 
-      - name: 🪛 Extra Kernel Options
+      - name: Configure ZRAM overrides
+        if: env.ZRAM_COMPRESSOR != 'source' || env.ZRAM_WRITEBACK != 'source'
+        shell: bash
         run: |
-          # Only ${{ env.DEVICE_NAME }} use it.
-          cd $GITHUB_WORKSPACE/device_kernel
-          # Nothing
+          cd "$GITHUB_WORKSPACE/device_kernel"
+          defconfig="arch/$KERNEL_ARCH/configs/$DEFCONFIG_NAME"
+
+          if [[ "$ZRAM_COMPRESSOR" != source ]]; then
+            compressor="${ZRAM_COMPRESSOR^^}"
+            while IFS= read -r symbol; do
+              scripts/config --file "$defconfig" --undefine "$symbol"
+            done < <(sed -n 's/^config \(ZRAM_DEF_COMP_[A-Z0-9_]*\)$/\1/p' drivers/block/zram/Kconfig)
+            scripts/config --file "$defconfig" --enable ZRAM \
+              --enable "ZRAM_BACKEND_$compressor" --enable "ZRAM_DEF_COMP_$compressor"
+          fi
+
+          case "$ZRAM_WRITEBACK" in
+            enabled) scripts/config --file "$defconfig" --enable ZRAM --enable ZRAM_WRITEBACK ;;
+            disabled) scripts/config --file "$defconfig" --disable ZRAM_WRITEBACK ;;
+          esac
 
       - name: 🧰 Patch Kernel of Re:Kernel
         uses: ./.github/workflows/patch-rekernel
@@ -141,6 +255,19 @@ jobs:
 
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
+
+      - name: Verify requested ZRAM configuration
+        if: env.ZRAM_COMPRESSOR != 'source' || env.ZRAM_WRITEBACK != 'source'
+        shell: bash
+        run: |
+          config="$GITHUB_WORKSPACE/device_kernel/out/.config"
+          if [[ "$ZRAM_COMPRESSOR" != source ]]; then
+            grep -Fx "CONFIG_ZRAM_DEF_COMP=\"$ZRAM_COMPRESSOR\"" "$config"
+          fi
+          case "$ZRAM_WRITEBACK" in
+            enabled) grep -Fx 'CONFIG_ZRAM_WRITEBACK=y' "$config" ;;
+            disabled) grep -Fx '# CONFIG_ZRAM_WRITEBACK is not set' "$config" ;;
+          esac
 
       - name: 🔩 Pack Process
         uses: ./.github/workflows/pack-process

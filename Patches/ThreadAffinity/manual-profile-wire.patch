@@ -1,0 +1,96 @@
+diff --git a/efficiency/thread_affinity/ace6_thread_affinity.c b/efficiency/thread_affinity/ace6_thread_affinity.c
+index 84e954181b2a7b938fe6482ae02d43fcb7094bda..f51c5fede6acbe157cffeef2e7a2ea74863f7e06 100644
+--- a/efficiency/thread_affinity/ace6_thread_affinity.c
++++ b/efficiency/thread_affinity/ace6_thread_affinity.c
+@@ -1025,13 +1025,13 @@ static ssize_t control_write(struct file *file, const char __user *user,
+ static ssize_t control_read(struct file *file, char __user *user,
+ 			    size_t size, loff_t *offset)
+ {
+-	char stats[768];
++	char stats[800];
+ 	int len;
+ 
+ 	mutex_lock(&policy_lock);
+ 	len = scnprintf(stats, sizeof(stats),
+ 		"revision=%u\nrules=%u\nvalidated=%u\nleases=%u\npending=%d\nchanged=%ld\nclamped=%ld\nfailed=%ld\ndropped=%ld\n"
+-		"profile_wire=1\nwire_lines=%u\nstored_rules=%u\nprofiles=%u\nprofile_bindings=%u\n"
++		"profile_wire=1\nmanual_profile_wire=1\nwire_lines=%u\nstored_rules=%u\nprofiles=%u\nprofile_bindings=%u\n"
+ 		"adaptive=%s\nforeground=%s\ndisplay_off=%u\ncontext_switches=%u\nadapted=%ld\n"
+ 		"game_tgid=%d\ngame_top=%d,%d,%d\ngame_samples=%u\ngame_finalized=%u\n"
+ 		"snapshot_capacity=%u\nsnapshot_growths=%u\nscene_group_capacity=%u\n"
+diff --git a/efficiency/thread_affinity/affinity_rules.h b/efficiency/thread_affinity/affinity_rules.h
+index c189a5c305efb29c55f5bc1da810d422fe7a2c34..359414e024bc62f4ec670fa7a707e930f907e42d 100644
+--- a/efficiency/thread_affinity/affinity_rules.h
++++ b/efficiency/thread_affinity/affinity_rules.h
+@@ -56,6 +56,7 @@ struct affinity_profile {
+ 	struct list_head owned;
+ 	struct affinity_thread_set threads;
+ 	unsigned int count;
++	bool manual;
+ };
+ 
+ struct affinity_binding {
+@@ -269,7 +270,8 @@ static int parse_rule(struct affinity_policy *policy, char *line)
+ }
+ 
+ static int define_profile(struct affinity_policy *policy, struct affinity_profile **profiles,
+-			  struct affinity_profile **current_profile, const char *text)
++			  struct affinity_profile **current_profile, const char *text,
++			  bool manual)
+ {
+ 	struct affinity_profile *profile;
+ 	unsigned int id;
+@@ -279,6 +281,7 @@ static int define_profile(struct affinity_policy *policy, struct affinity_profil
+ 	profile = kzalloc(sizeof(*profile), GFP_KERNEL);
+ 	if (!profile)
+ 		return -ENOMEM;
++	profile->manual = manual;
+ 	list_add(&profile->owned, &policy->profiles);
+ 	profiles[id] = profile;
+ 	*current_profile = profile;
+@@ -299,7 +302,7 @@ static int bind_profile(struct affinity_policy *policy, struct affinity_profile
+ 	    kstrtouint(number, 10, &id) || !id || id >= MAX_PROFILES || !profiles)
+ 		return -EINVAL;
+ 	profile = profiles[id];
+-	if (!profile || !profile->count)
++	if (!profile || !profile->count || (profile->manual && has_glob(text)))
+ 		return -EINVAL;
+ 	if (profile->count > MAX_RULES - policy->count)
+ 		return -E2BIG;
+@@ -329,7 +332,8 @@ static int parse_profile_rule(struct affinity_policy *policy, struct affinity_pr
+ 	ret = parse_rule_fields(rule, line, &process);
+ 	if (ret || *process)
+ 		return ret ?: -EINVAL;
+-	rule->source = 1;
++	rule->manual = profile->manual;
++	rule->source = rule->manual ? 4 : 1;
+ 	rule->index = profile->count++;
+ 	policy->stored_rules++;
+ 	add_thread_rule(&profile->threads, rule);
+@@ -384,6 +388,8 @@ static struct affinity_policy *parse_policy(char *data, size_t size)
+ 	INIT_LIST_HEAD(&policy->selectors);
+ 	INIT_LIST_HEAD(&policy->profiles);
+ 	while ((line = strsep(&data, "\n")) != NULL) {
++		bool manual_profile = !strncmp(line, "@manual_profile ", 16);
++
+ 		if (!*line)
+ 			continue;
+ 		if (!strncmp(line, "?adapt\t", 7) && !policy->wire_lines && !policy->adaptive_scope[0]) {
+@@ -397,14 +403,15 @@ static struct affinity_policy *parse_policy(char *data, size_t size)
+ 			continue;
+ 		}
+ 		policy->wire_lines++;
+-		if (!strncmp(line, "@profile ", 9)) {
++		if (manual_profile || !strncmp(line, "@profile ", 9)) {
+ 			if (!profiles)
+ 				profiles = kcalloc(MAX_PROFILES, sizeof(*profiles), GFP_KERNEL);
+ 			if (!profiles) {
+ 				ret = -ENOMEM;
+ 				goto invalid;
+ 			}
+-			ret = define_profile(policy, profiles, &current_profile, line + 9);
++			ret = define_profile(policy, profiles, &current_profile,
++					     line + (manual_profile ? 16 : 9), manual_profile);
+ 		} else if (*line == '{' || *line == '=') {
+ 			ret = parse_profile_rule(policy, current_profile, line);
+ 		} else {

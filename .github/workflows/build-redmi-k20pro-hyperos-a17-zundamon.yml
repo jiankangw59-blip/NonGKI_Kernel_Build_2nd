@@ -292,6 +292,7 @@ jobs:
           git -C "$upstream" fetch --depth=1 https://github.com/jiankangw59-blip/Build_Oneplus_Realme_Action.git \
             768cf92fcdf469ad6d1dc2ebc4c2e0813c59f9c8
           git -C "$upstream" checkout --detach FETCH_HEAD
+          git -C "$upstream" apply --whitespace=error /tmp/Patches/ThreadAffinity/manual-profile-wire.patch
           python3 /tmp/Patches/ThreadAffinity/install_raphael.py \
             --kernel "$GITHUB_WORKSPACE/device_kernel" --source "$upstream/efficiency/thread_affinity"
 

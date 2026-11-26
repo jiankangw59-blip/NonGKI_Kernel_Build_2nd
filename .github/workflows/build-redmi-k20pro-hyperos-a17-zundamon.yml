@@ -31,7 +31,7 @@ on:
           - enabled
           - disabled
       rekernel:
-        description: "启用 Re:Kernel 补丁"
+        description: "内置 Re:Kernel（Binder 和 Signal 事件）"
         type: boolean
         default: false
       droidspaces:
@@ -111,7 +111,7 @@ env:
   NEED_DTBO : false
   NEED_SAFE_DTBO : false
 
-  ROM_TEXT : "hyperos_a17"
+  ROM_TEXT : ${{ inputs.rekernel && 'hyperos_a17_rekernel' || 'hyperos_a17' }}
 
   # Other env
   PYTHON_VERSION: "3" # Only 2(Ubuntu 22.04 and Ubuntu 20.04) or 3(Any OS Versions).
@@ -235,8 +235,30 @@ jobs:
             disabled) scripts/config --file "$defconfig" --disable ZRAM_WRITEBACK ;;
           esac
 
-      - name: 🧰 Patch Kernel of Re:Kernel
-        uses: ./.github/workflows/patch-rekernel
+      - name: Integrate Re:Kernel for raphael
+        if: env.REKERNEL_ENABLE == 'true'
+        shell: bash
+        run: |
+          cd "$GITHUB_WORKSPACE/device_kernel"
+          grep -q 'cgroup_task_frozen' include/linux/cgroup.h
+
+          upstream="$(mktemp -d "$RUNNER_TEMP/rekernel.XXXXXX")"
+          git -C "$upstream" init -q
+          git -C "$upstream" fetch --depth=1 https://github.com/Sakion-Team/Re-Kernel.git \
+            ac08296174d7fb2801c0eee1084f067a34f8a0fe
+          git -C "$upstream" checkout --detach FETCH_HEAD
+
+          # Configure raphael_defconfig below instead of the generic ARM64 defconfig.
+          installer="$upstream/Integrate/patches.sh"
+          sed -i '/^[[:space:]]*arch\/arm64\/configs\/defconfig[[:space:]]*$/d' "$installer"
+          bash -e "$installer"
+
+          sed -i '/^#include <linux\/freezer.h>/a #include <linux/sched/jobctl.h>' drivers/rekernel/rekernel.h
+          scripts/config --file "arch/$KERNEL_ARCH/configs/$DEFCONFIG_NAME" \
+            --enable REKERNEL --disable REKERNEL_NETWORK
+
+          grep -F 'rekernel_binder_transaction(reply, t, target_node, tr);' drivers/android/binder.c
+          grep -F 'rekernel_report(SIGNAL, sig,' kernel/signal.c
 
       - name: 💿 Patch Kernel of Droidspaces
         uses: ./.github/workflows/patch-droidspaces
@@ -257,7 +279,7 @@ jobs:
         uses: ./.github/workflows/build-process
 
       - name: Verify requested kernel configuration
-        if: env.ZRAM_COMPRESSOR != 'source' || env.ZRAM_WRITEBACK != 'source' || env.VPNHIDE_ENABLE == 'true'
+        if: env.ZRAM_COMPRESSOR != 'source' || env.ZRAM_WRITEBACK != 'source' || env.VPNHIDE_ENABLE == 'true' || env.REKERNEL_ENABLE == 'true'
         shell: bash
         run: |
           config="$GITHUB_WORKSPACE/device_kernel/out/.config"
@@ -270,6 +292,14 @@ jobs:
           esac
           if [[ "$VPNHIDE_ENABLE" == true ]]; then
             grep -Fx 'CONFIG_VPNHIDE=y' "$config"
+          fi
+          if [[ "$REKERNEL_ENABLE" == true ]]; then
+            grep -Fx 'CONFIG_REKERNEL=y' "$config"
+            grep -Fx '# CONFIG_REKERNEL_NETWORK is not set' "$config"
+            out="$GITHUB_WORKSPACE/device_kernel/out"
+            "$GITHUB_WORKSPACE/clang-custom/bin/llvm-ar" t "$out/drivers/rekernel/built-in.a" |
+              grep -E '(^|/)rekernel\.o$'
+            grep -m4 -E ' [Tt] (rekernel_report|rekernel_binder_transaction)(\.|$)' "$out/System.map"
           fi
 
       - name: 🔩 Pack Process

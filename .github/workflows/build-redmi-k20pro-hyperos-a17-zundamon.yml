@@ -295,6 +295,23 @@ jobs:
           python3 /tmp/Patches/ThreadAffinity/install_raphael.py \
             --kernel "$GITHUB_WORKSPACE/device_kernel" --source "$upstream/efficiency/thread_affinity"
 
+      - name: Apply upstream SELinux netlink message validation
+        shell: bash
+        working-directory: device_kernel
+        run: |
+          patch_path="/tmp/Patches/Patch/selinux-netlink-send-fb73974.patch"
+          printf 'Kernel source commit %s\n' "$(git rev-parse HEAD)"
+
+          if git apply --reverse --check --whitespace=error "$patch_path" 2>/dev/null; then
+            echo "SELinux netlink message validation is already present."
+          elif git apply --check --whitespace=error "$patch_path"; then
+            git apply --whitespace=error "$patch_path"
+          else
+            echo "::error::SELinux netlink patch does not match the checked-out kernel ($(git rev-parse HEAD))."
+            exit 1
+          fi
+          sha256sum security/selinux/hooks.c
+
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
 

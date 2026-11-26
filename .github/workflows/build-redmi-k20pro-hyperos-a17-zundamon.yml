@@ -34,6 +34,10 @@ on:
         description: "内置 Re:Kernel（Binder 和 Signal 事件）"
         type: boolean
         default: false
+      enable_thread_affinity:
+        description: "内置线程分配（兼容现有 AppOpt 规则和 Scene 控制端）"
+        type: boolean
+        default: false
       droidspaces:
         description: "启用 Droidspaces（与 SUSFS 同用可能异常）"
         type: boolean
@@ -111,7 +115,7 @@ env:
   NEED_DTBO : false
   NEED_SAFE_DTBO : false
 
-  ROM_TEXT : ${{ inputs.rekernel && 'hyperos_a17_rekernel' || 'hyperos_a17' }}
+  ROM_TEXT : ${{ format('hyperos_a17{0}{1}', inputs.rekernel && '_rekernel' || '', inputs.enable_thread_affinity && '_thread_affinity' || '') }}
 
   # Other env
   PYTHON_VERSION: "3" # Only 2(Ubuntu 22.04 and Ubuntu 20.04) or 3(Any OS Versions).
@@ -128,6 +132,7 @@ env:
   SUSFS_PATCH_FIXED: "susfs_fixed" # Fill in your patches here. If there are multiple patches, please separate them with a comma. Leave it blank if there isn't one. -> patch1,patch2
 
   REKERNEL_ENABLE: ${{ inputs.rekernel == true }}
+  THREAD_AFFINITY_ENABLE: ${{ inputs.enable_thread_affinity == true }}
   DROIDSPACES_ENABLE: ${{ inputs.droidspaces == true }}
   NOMOUNT_ENABLE: ${{ inputs.nomount == true }}
   FGETPRIORITY_ENABLE: ${{ inputs.fgetpriority == true }}
@@ -278,11 +283,23 @@ jobs:
       - name: 🛜 Patch Kernel of VPNHide
         uses: ./.github/workflows/patch-vpnhide
 
+      - name: Integrate thread affinity for raphael
+        if: env.THREAD_AFFINITY_ENABLE == 'true'
+        shell: bash
+        run: |
+          upstream="$(mktemp -d "$RUNNER_TEMP/thread-affinity.XXXXXX")"
+          git -C "$upstream" init -q
+          git -C "$upstream" fetch --depth=1 https://github.com/jiankangw59-blip/Build_Oneplus_Realme_Action.git \
+            768cf92fcdf469ad6d1dc2ebc4c2e0813c59f9c8
+          git -C "$upstream" checkout --detach FETCH_HEAD
+          python3 /tmp/Patches/ThreadAffinity/install_raphael.py \
+            --kernel "$GITHUB_WORKSPACE/device_kernel" --source "$upstream/efficiency/thread_affinity"
+
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
 
       - name: Verify requested kernel configuration
-        if: env.ZRAM_COMPRESSOR != 'source' || env.ZRAM_WRITEBACK != 'source' || env.VPNHIDE_ENABLE == 'true' || env.REKERNEL_ENABLE == 'true'
+        if: env.ZRAM_COMPRESSOR != 'source' || env.ZRAM_WRITEBACK != 'source' || env.VPNHIDE_ENABLE == 'true' || env.REKERNEL_ENABLE == 'true' || env.THREAD_AFFINITY_ENABLE == 'true'
         shell: bash
         run: |
           config="$GITHUB_WORKSPACE/device_kernel/out/.config"
@@ -303,6 +320,15 @@ jobs:
             "$GITHUB_WORKSPACE/clang-custom/bin/llvm-ar" t "$out/drivers/rekernel/built-in.a" |
               grep -E '(^|/)rekernel\.o$'
             grep -m4 -E ' [Tt] (rekernel_report|rekernel_binder_transaction)(\.|$)' "$out/System.map"
+          fi
+          if [[ "$THREAD_AFFINITY_ENABLE" == true ]]; then
+            grep -Fx 'CONFIG_CPUSETS=y' "$config"
+            grep -Fx 'CONFIG_TRACEPOINTS=y' "$config"
+            out="$GITHUB_WORKSPACE/device_kernel/out"
+            "$GITHUB_WORKSPACE/clang-custom/bin/llvm-ar" t "$out/kernel/sched/built-in.a" |
+              grep -E '(^|/)ace6_thread_affinity\.o$'
+            grep -m2 -E ' (__initcall.*affinity_init|ace6_set_task_affinity)([.]|$)' "$out/System.map"
+            grep -aFq 'ace6_thread_affinity' "$out/arch/arm64/boot/Image"
           fi
 
       - name: 🔩 Pack Process
